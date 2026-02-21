@@ -1,0 +1,146 @@
+{
+  "name": "Autonomous Logistics Decision Agent",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "logistics-agent",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [240, 400],
+      "webhookId": "logistics-agent-webhook"
+    },
+    {
+      "parameters": {
+        "jsCode": "// STEP 1 — STRATEGY SELECTION\nconst input = $input.first().json.body || $input.first().json;\n\nconst { current_location, fuel_level, orders = [], new_order } = input;\n\nlet selected_mode = \"Balanced Mode\";\nlet mode_reason = \"\";\n\nif (new_order && new_order.priority === \"high\") {\n  selected_mode = \"Emergency Mode\";\n  mode_reason = `New order #${new_order.id} has high priority — activating Emergency Mode to handle it immediately.`;\n} else if (fuel_level < 30) {\n  selected_mode = \"Cost Mode\";\n  mode_reason = `Fuel level is critically low at ${fuel_level}% (below 30%) — activating Cost Mode to minimize travel distance and conserve fuel.`;\n} else {\n  const highPriorityCount = orders.filter(o => o.priority === \"high\").length;\n  const totalOrders = orders.length;\n  if (totalOrders > 0 && highPriorityCount / totalOrders > 0.5) {\n    selected_mode = \"Speed Mode\";\n    mode_reason = `${highPriorityCount} of ${totalOrders} orders (${Math.round(highPriorityCount/totalOrders*100)}%) are high priority — activating Speed Mode.`;\n  } else {\n    selected_mode = \"Balanced Mode\";\n    mode_reason = `No emergency, fuel is adequate (${fuel_level}%), and high priority orders are not dominant — using Balanced Mode for optimal efficiency.`;\n  }\n}\n\nreturn [{\n  json: {\n    ...input,\n    selected_mode,\n    mode_reason\n  }\n}];\n"
+      },
+      "id": "strategy-selection",
+      "name": "Step 1: Strategy Selection",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [480, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "// STEP 2 — ROUTE OPTIMIZATION\nconst data = $input.first().json;\nconst { current_location, orders = [], new_order, selected_mode } = data;\n\nfunction haversineDistance(coord1, coord2) {\n  const R = 6371; // Earth radius km\n  const toRad = deg => deg * Math.PI / 180;\n  const dLat = toRad(coord2[0] - coord1[0]);\n  const dLon = toRad(coord2[1] - coord1[1]);\n  const a = Math.sin(dLat/2)**2 +\n            Math.cos(toRad(coord1[0])) * Math.cos(toRad(coord2[0])) *\n            Math.sin(dLon/2)**2;\n  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));\n}\n\nfunction calcTotalDistance(sequence, startCoord) {\n  let total = 0;\n  let prev = startCoord;\n  for (const order of sequence) {\n    total += haversineDistance(prev, order.location);\n    prev = order.location;\n  }\n  return Math.round(total * 10) / 10;\n}\n\nfunction greedyNearest(remaining, start) {\n  const route = [];\n  let current = start;\n  let pool = [...remaining];\n  while (pool.length > 0) {\n    pool.sort((a, b) => haversineDistance(current, a.location) - haversineDistance(current, b.location));\n    const next = pool.shift();\n    route.push(next);\n    current = next.location;\n  }\n  return route;\n}\n\nconst priorityWeight = { high: 3, medium: 2, low: 1 };\n\nlet allOrders = [...orders];\nif (new_order) allOrders.push(new_order);\n\nlet optimized_route = [];\nlet optimization_explanation = \"\";\n\nif (allOrders.length === 0) {\n  optimized_route = [];\n  optimization_explanation = \"No orders to route. Vehicle is idle.\";\n} else if (selected_mode === \"Emergency Mode\" && new_order) {\n  const emergency = allOrders.find(o => o.id === new_order.id);\n  const rest = allOrders.filter(o => o.id !== new_order.id);\n  const restRouted = greedyNearest(rest, new_order.location);\n  optimized_route = [emergency, ...restRouted].map(o => o.id);\n  optimization_explanation = `Emergency order #${new_order.id} dispatched first. Remaining ${rest.length} orders optimized by proximity from emergency drop-off point.`;\n} else if (selected_mode === \"Speed Mode\") {\n  const highOrders = allOrders.filter(o => o.priority === \"high\");\n  const others = allOrders.filter(o => o.priority !== \"high\");\n  const highRouted = greedyNearest(highOrders, current_location);\n  const lastHigh = highRouted.length > 0 ? highRouted[highRouted.length - 1].location : current_location;\n  const otherRouted = greedyNearest(others, lastHigh);\n  optimized_route = [...highRouted, ...otherRouted].map(o => o.id);\n  optimization_explanation = `Speed Mode: ${highOrders.length} high-priority orders dispatched first via nearest-neighbor, then ${others.length} remaining orders optimized by distance.`;\n} else if (selected_mode === \"Cost Mode\") {\n  const routed = greedyNearest(allOrders, current_location);\n  optimized_route = routed.map(o => o.id);\n  optimization_explanation = `Cost Mode: All ${allOrders.length} orders routed using nearest-neighbor algorithm to minimize total travel distance and fuel consumption.`;\n} else {\n  // Balanced Mode — weighted score of distance and priority\n  const route = [];\n  let remaining = [...allOrders];\n  let current = current_location;\n  while (remaining.length > 0) {\n    const maxDist = Math.max(...remaining.map(o => haversineDistance(current, o.location))) || 1;\n    remaining.sort((a, b) => {\n      const distA = haversineDistance(current, a.location) / maxDist;\n      const distB = haversineDistance(current, b.location) / maxDist;\n      const scoreA = distA - (priorityWeight[a.priority] * 0.3);\n      const scoreB = distB - (priorityWeight[b.priority] * 0.3);\n      return scoreA - scoreB;\n    });\n    const next = remaining.shift();\n    route.push(next);\n    current = next.location;\n  }\n  optimized_route = route.map(o => o.id);\n  optimization_explanation = `Balanced Mode: Orders scored using weighted combination of proximity (70%) and priority (30%). ${allOrders.length} orders sequenced for optimal efficiency.`;\n}\n\nconst orderedObjects = optimized_route.map(id => allOrders.find(o => o.id === id)).filter(Boolean);\nconst estimated_total_distance = calcTotalDistance(orderedObjects, current_location);\n\nreturn [{\n  json: {\n    ...data,\n    optimized_route,\n    estimated_total_distance,\n    optimization_explanation\n  }\n}];\n"
+      },
+      "id": "route-optimization",
+      "name": "Step 2: Route Optimization",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [720, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "// STEP 3 — RISK ASSESSMENT\nconst data = $input.first().json;\nconst { fuel_level, orders = [], new_order, estimated_total_distance, selected_mode, optimized_route } = data;\n\nconst allOrders = new_order ? [...orders, new_order] : [...orders];\nconst risk_factors = [];\n\n// Fuel risk\nconst estimatedFuelNeeded = estimated_total_distance * 0.08; // assume 8% fuel per 100km baseline\nif (fuel_level < 15) {\n  risk_factors.push(`CRITICAL: Fuel at ${fuel_level}% — vehicle may not complete route (estimated ${estimated_total_distance} km needed).`);\n} else if (fuel_level < 30) {\n  risk_factors.push(`LOW FUEL: ${fuel_level}% remaining — refueling stop recommended before or during route.`);\n} else if (fuel_level < 50 && estimated_total_distance > 150) {\n  risk_factors.push(`Moderate fuel concern: ${fuel_level}% fuel for a ${estimated_total_distance} km route — monitor levels.`);\n}\n\n// Long detour risk\nif (estimated_total_distance > 200) {\n  risk_factors.push(`Long route detected: ${estimated_total_distance} km total — potential driver fatigue and delivery time risk.`);\n}\n\n// Low priority delay risk\nconst lowPriorityOrders = allOrders.filter(o => o.priority === \"low\");\nif (lowPriorityOrders.length > 0 && (selected_mode === \"Speed Mode\" || selected_mode === \"Emergency Mode\")) {\n  risk_factors.push(`${lowPriorityOrders.length} low-priority order(s) may face significant delays due to ${selected_mode}.`);\n}\n\n// No orders risk\nif (allOrders.length === 0) {\n  risk_factors.push(\"No active orders — pipeline may have upstream data issues.\");\n}\n\n// Operational inefficiency\nif (selected_mode === \"Cost Mode\" && allOrders.some(o => o.priority === \"high\")) {\n  risk_factors.push(\"Cost Mode active with high-priority orders present — SLA breach risk for time-sensitive deliveries.\");\n}\n\n// Determine risk level\nlet risk_level = \"Low\";\nconst criticalFactors = risk_factors.filter(f => f.startsWith(\"CRITICAL\"));\nconst warnFactors = risk_factors.filter(f => !f.startsWith(\"CRITICAL\"));\n\nif (criticalFactors.length > 0 || risk_factors.length >= 3) {\n  risk_level = \"High\";\n} else if (warnFactors.length >= 2 || (fuel_level < 30 && estimated_total_distance > 100)) {\n  risk_level = \"Medium\";\n} else {\n  risk_level = \"Low\";\n}\n\nconst risk_explanation = risk_factors.length === 0\n  ? `All systems nominal. Fuel is adequate at ${fuel_level}%, route distance is manageable at ${estimated_total_distance} km, and no priority conflicts detected.`\n  : `${risk_level} operational risk identified based on ${risk_factors.length} factor(s): fuel sufficiency, route length, and priority-delivery conflicts.`;\n\nreturn [{\n  json: {\n    ...data,\n    risk_level,\n    risk_factors,\n    risk_explanation\n  }\n}];\n"
+      },
+      "id": "risk-assessment",
+      "name": "Step 3: Risk Assessment",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [960, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "// FINAL RESPONSE BUILDER\nconst data = $input.first().json;\n\nconst final_summary = `[${data.selected_mode}] Vehicle at (${data.current_location}) with ${data.fuel_level}% fuel. ` +\n  `${data.optimized_route.length} orders sequenced over ${data.estimated_total_distance} km. ` +\n  `Risk: ${data.risk_level}. ${data.risk_factors.length > 0 ? data.risk_factors[0] : 'All clear.'}`;\n\nconst response = {\n  mode: data.selected_mode,\n  route: data.optimized_route,\n  distance: data.estimated_total_distance,\n  mode_reason: data.mode_reason,\n  optimization_explanation: data.optimization_explanation,\n  risk_level: data.risk_level,\n  risk_factors: data.risk_factors,\n  final_summary\n};\n\nreturn [{ json: response }];\n"
+      },
+      "id": "response-builder",
+      "name": "Build Final Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1200, 400]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          }
+        }
+      },
+      "id": "respond-to-webhook",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1440, 400]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Step 1: Strategy Selection",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Step 1: Strategy Selection": {
+      "main": [
+        [
+          {
+            "node": "Step 2: Route Optimization",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Step 2: Route Optimization": {
+      "main": [
+        [
+          {
+            "node": "Step 3: Risk Assessment",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Step 3: Risk Assessment": {
+      "main": [
+        [
+          {
+            "node": "Build Final Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Final Response": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": ["logistics", "autonomous-agent"],
+  "triggerCount": 1,
+  "updatedAt": "2026-02-21T00:00:00.000Z",
+  "versionId": "1"
+}
