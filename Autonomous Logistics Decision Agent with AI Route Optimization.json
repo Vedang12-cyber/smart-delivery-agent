@@ -1,0 +1,492 @@
+{
+  "name": "Autonomous Logistics Decision Agent with AI Route Optimization",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "logistics-agent",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "9fdb3429-156a-46f7-af55-9d5d31dafd80",
+      "name": "Logistics Agent Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        256,
+        400
+      ],
+      "webhookId": "f243e481-0c46-41da-9541-1ce602639e95"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "id-1",
+              "leftValue": "={{ $json.body.current_location }}",
+              "operator": {
+                "type": "string",
+                "operation": "exists"
+              }
+            },
+            {
+              "id": "id-2",
+              "leftValue": "={{ $json.body.fuel_level }}",
+              "operator": {
+                "type": "number",
+                "operation": "exists"
+              }
+            },
+            {
+              "id": "id-3",
+              "leftValue": "={{ $json.body.orders }}",
+              "operator": {
+                "type": "array",
+                "operation": "exists"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {
+          "ignoreCase": true
+        }
+      },
+      "id": "9ecca905-cf4e-4efe-ac93-e61e465ad09a",
+      "name": "Validate Required Fields",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        480,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "{\n  \"error\": \"Missing required fields: current_location, fuel_level, or orders\",\n  \"status\": \"failed\"\n}",
+        "options": {}
+      },
+      "id": "75413ab6-20a8-485e-a2a4-810c3ebe9083",
+      "name": "Return Error Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        704,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Strategy Engine: Determine optimal logistics mode based on input conditions\n\nconst items = $input.all();\nconst firstItem = items[0].json;\n\nlet selected_mode = 'Balanced';\nlet mode_reason = '';\n\n// Priority 1: Check for new emergency orders\nif (firstItem.new_order && firstItem.new_order.priority === 'high') {\n  selected_mode = 'Emergency';\n  mode_reason = 'New high-priority order detected - prioritizing immediate delivery';\n}\n// Priority 2: Check fuel level for cost optimization\nelse if (firstItem.fuel_level !== undefined && firstItem.fuel_level < 30) {\n  selected_mode = 'Cost';\n  mode_reason = `Low fuel level detected (${firstItem.fuel_level}%) - optimizing for fuel efficiency`;\n}\n// Priority 3: Check if majority of orders are high priority\nelse if (firstItem.orders && Array.isArray(firstItem.orders)) {\n  const highPriorityCount = firstItem.orders.filter(order => order.priority === 'high').length;\n  const totalOrders = firstItem.orders.length;\n  const highPriorityPercentage = (highPriorityCount / totalOrders) * 100;\n  \n  if (highPriorityPercentage > 50) {\n    selected_mode = 'Speed';\n    mode_reason = `${highPriorityPercentage.toFixed(1)}% of orders are high priority - optimizing for speed`;\n  } else {\n    selected_mode = 'Balanced';\n    mode_reason = 'Normal operating conditions - using balanced optimization';\n  }\n}\n// Default: Balanced mode\nelse {\n  selected_mode = 'Balanced';\n  mode_reason = 'No special conditions detected - using balanced optimization';\n}\n\nreturn [\n  {\n    json: {\n      selected_mode: selected_mode,\n      mode_reason: mode_reason,\n      ...firstItem\n    }\n  }\n];"
+      },
+      "id": "8683a899-9837-4090-8678-e8fe3e1944e3",
+      "name": "Strategy Engine",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        704,
+        496
+      ]
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "body.orders",
+        "options": {}
+      },
+      "id": "4f9f21a4-0209-416f-9bdd-3ff5a9ce6083",
+      "name": "Split Orders for Distance Calculation",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [
+        928,
+        496
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://api.distancematrix.ai/maps/api/distancematrix/json",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "origins",
+              "value": "={{ $('Validate Required Fields').item.json.body.current_location[0] }},{{ $('Validate Required Fields').item.json.body.current_location[1] }}"
+            },
+            {
+              "name": "destinations",
+              "value": "=19.1,72.9"
+            },
+            {
+              "name": "key",
+              "value": "=zyjjVcMZ0W62pkRNRndQUcZtARFh5j265hOCAHUacQJFSsDjXFpA4Oh0wukBIOLB"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "8a8a6576-7452-47a2-9629-628d911d40aa",
+      "name": "Google Distance Matrix API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1152,
+        496
+      ]
+    },
+    {
+      "parameters": {
+        "aggregate": "aggregateAllItemData",
+        "options": {}
+      },
+      "id": "1c8b341e-fc5c-4778-81f6-a4bf7964890c",
+      "name": "Collect All Distances",
+      "type": "n8n-nodes-base.aggregate",
+      "typeVersion": 1,
+      "position": [
+        1376,
+        496
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Route Optimizer: Optimize delivery routes based on selected mode\n\nconst items = $input.all();\nif (!items.length) {\n  throw new Error(\"No input items received\");\n}\n\nconst firstItem = items[0].json;\n\n\n// ================= PARSE BODY SAFELY =================\n\nlet parsedBody = firstItem.body;\n\nif (typeof parsedBody === \"string\") {\n  try {\n    parsedBody = JSON.parse(parsedBody);\n  } catch {\n    parsedBody = {};\n  }\n}\n\n\n// ================= BASIC INPUTS =================\n\nconst selected_mode = firstItem.selected_mode || \"Balanced\";\n\nconst current_location =\n  firstItem.origin_addresses?.[0] ||\n  parsedBody?.origin ||\n  parsedBody?.current_location ||\n  \"unknown\";\n\nconst orders =\n  parsedBody?.orders ||\n  firstItem.orders ||\n  firstItem.data?.orders ||\n  [];\n\n\n// ================= DISTANCE API RESPONSES =================\n\nconst apiResponses =\n  firstItem.data ||\n  firstItem.rows ||\n  items.map(i => i.json);\n\n\n// ================= BUILD DISTANCE DATA =================\n\nconst distanceData = apiResponses.map((apiResponse, index) => {\n\n  const order = orders[index] || {};\n\n  let distance_km = 0;\n\n  const element =\n    apiResponse?.rows?.[0]?.elements?.[0] ||\n    apiResponse?.elements?.[0];\n\n  if (element?.distance?.value) {\n    distance_km = element.distance.value / 1000;\n  }\n\n  return {\n    order_id: order.id ?? index,\n    location: order.location ?? order.address ?? null,\n    priority: order.priority ?? \"medium\",\n    distance_km,\n    visited: false\n  };\n});\n\n\n// ================= ROUTE LOGIC =================\n\nlet optimized_route = [];\nlet total_distance_km = 0;\n\n\nif (selected_mode === \"Emergency\") {\n\n  const newOrderId = parsedBody?.new_order?.id;\n\n  const newOrder = distanceData.find(d => d.order_id === newOrderId);\n\n  if (newOrder) {\n    optimized_route.push(newOrder);\n    total_distance_km += newOrder.distance_km;\n    newOrder.visited = true;\n  }\n\n  while (optimized_route.length < distanceData.length) {\n    let nearest = null;\n    let minDist = Infinity;\n\n    for (const order of distanceData) {\n      if (!order.visited && order.distance_km < minDist) {\n        minDist = order.distance_km;\n        nearest = order;\n      }\n    }\n\n    if (!nearest) break;\n\n    optimized_route.push(nearest);\n    total_distance_km += nearest.distance_km;\n    nearest.visited = true;\n  }\n\n}\nelse if (selected_mode === \"Cost\") {\n\n  while (optimized_route.length < distanceData.length) {\n    let nearest = null;\n    let minDist = Infinity;\n\n    for (const order of distanceData) {\n      if (!order.visited && order.distance_km < minDist) {\n        minDist = order.distance_km;\n        nearest = order;\n      }\n    }\n\n    if (!nearest) break;\n\n    optimized_route.push(nearest);\n    total_distance_km += nearest.distance_km;\n    nearest.visited = true;\n  }\n\n}\nelse if (selected_mode === \"Speed\") {\n\n  const high = distanceData\n    .filter(o => o.priority === \"high\")\n    .sort((a,b)=>a.distance_km-b.distance_km);\n\n  const normal = distanceData\n    .filter(o => o.priority !== \"high\")\n    .sort((a,b)=>a.distance_km-b.distance_km);\n\n  optimized_route = [...high,...normal];\n\n  total_distance_km =\n    optimized_route.reduce((s,o)=>s+o.distance_km,0);\n\n}\nelse {\n\n  const weight = { high:1, medium:2, low:3 };\n\n  const scored = distanceData.map(order=>{\n    const priorityScore = weight[order.priority] || 2;\n    const score = (order.distance_km * 0.7) + (priorityScore * 0.3);\n    return {...order, score};\n  });\n\n  optimized_route =\n    scored.sort((a,b)=>a.score-b.score);\n\n  total_distance_km =\n    optimized_route.reduce((s,o)=>s+o.distance_km,0);\n}\n\n\n// ================= CLEAN OUTPUT =================\n\nconst cleanRoute = optimized_route.map(o=>({\n  order_id:o.order_id,\n  location:o.location,\n  priority:o.priority,\n  distance_km:o.distance_km\n}));\n\n\n// ================= EXPLANATION ENGINE =================\n\nconst explanation =\n  selected_mode === \"Emergency\"\n    ? \"Emergency mode selected: urgent order first then nearest.\"\n    : selected_mode === \"Cost\"\n    ? \"Cost mode selected: shortest path optimization.\"\n    : selected_mode === \"Speed\"\n    ? \"Speed mode selected: high priority deliveries first.\"\n    : \"Balanced mode selected: weighted scoring using distance + priority.\";\n\n\n// ================= RETURN =================\n\nreturn [{\n  json:{\n    selected_mode,\n    mode_reason:firstItem.mode_reason || \"auto\",\n    explanation,\n    optimized_route: cleanRoute,\n    total_distance_km: Math.round(total_distance_km*100)/100,\n    current_location,\n    fuel_level: parsedBody?.fuel_level ?? null,\n    total_orders: cleanRoute.length,\n    timestamp: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "6f90a71e-f3b2-46ea-8a66-1d3df0ae7416",
+      "name": "Route Optimizer",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1520,
+        496
+      ],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-4o",
+          "mode": "list",
+          "cachedResultName": "GPT-4O"
+        },
+        "responses": {
+          "values": [
+            {
+              "content": "=You are a logistics AI assistant. Explain why the selected routing mode ({{ $json.selected_mode }}) and route sequence were chosen. Consider: Fuel level: {{ $('Validate Required Fields').item.json.body.fuel_level }}%, Selected mode: {{ $json.selected_mode }}, Mode reason: {{ $json.mode_reason }}, Optimized route: {{ $json.optimized_route }}, Total distance: {{ $json.total_distance_km }} km. Provide: 1) A detailed explanation of the decision logic, 2) A brief summary (2-3 sentences)."
+            },
+            {}
+          ]
+        },
+        "builtInTools": {},
+        "options": {
+          "instructions": "You are an expert logistics AI that provides clear, concise explanations for routing decisions. Focus on efficiency, safety, and priority management."
+        }
+      },
+      "id": "c5d1b8ff-ced9-4ccf-b68d-bd4247b90bc6",
+      "name": "AI Reasoning Engine",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2.1,
+      "position": [
+        1824,
+        400
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "pT4R4D9oOpucj7lo",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Risk Engine: Assess risks based on fuel level, distance, mode, and priorities\n\nconst items = $input.all();\nconst firstItem = items[0].json;\n\nconst fuel_level = firstItem.fuel_level;\nconst total_distance_km = firstItem.total_distance_km;\nconst selected_mode = firstItem.selected_mode;\nconst optimized_route = firstItem.optimized_route || [];\n\nlet risk_level = 'Low';\nconst risk_factors = [];\n\n// Risk Assessment Logic\n\n// 1. Fuel Level Risk\nif (fuel_level < 15) {\n  risk_factors.push({\n    type: 'Critical Fuel Level',\n    severity: 'High',\n    description: `Fuel level at ${fuel_level}% - immediate refueling required`\n  });\n  risk_level = 'High';\n} else if (fuel_level < 30) {\n  risk_factors.push({\n    type: 'Low Fuel Level',\n    severity: 'Medium',\n    description: `Fuel level at ${fuel_level}% - refueling recommended`\n  });\n  if (risk_level !== 'High') {\n    risk_level = 'Medium';\n  }\n}\n\n// 2. Long Route Risk\nif (total_distance_km > 200) {\n  risk_factors.push({\n    type: 'Long Route Distance',\n    severity: 'Medium',\n    description: `Total route distance of ${total_distance_km} km exceeds 200 km threshold`\n  });\n  if (risk_level === 'Low') {\n    risk_level = 'Medium';\n  }\n}\n\n// 3. SLA Risk: Cost mode with high priority orders\nconst highPriorityOrders = optimized_route.filter(order => order.priority === 'high');\nif (selected_mode === 'Cost' && highPriorityOrders.length > 0) {\n  risk_factors.push({\n    type: 'SLA Risk',\n    severity: 'Medium',\n    description: `Cost optimization mode selected with ${highPriorityOrders.length} high-priority orders - potential delivery delays`\n  });\n  if (risk_level === 'Low') {\n    risk_level = 'Medium';\n  }\n}\n\n// If no risks detected\nif (risk_factors.length === 0) {\n  risk_factors.push({\n    type: 'No Risks Detected',\n    severity: 'Low',\n    description: 'All parameters within acceptable ranges'\n  });\n}\n\nreturn [\n  {\n    json: {\n      ...firstItem,\n      risk_level: risk_level,\n      risk_factors: risk_factors\n    }\n  }\n];"
+      },
+      "id": "266891c1-2b49-4b94-b75c-dc9286e214f4",
+      "name": "Risk Engine",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1888,
+        592
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "id-1",
+              "name": "mode",
+              "value": "={{ $('Route Optimizer').item.json.selected_mode }}",
+              "type": "string"
+            },
+            {
+              "id": "id-2",
+              "name": "route",
+              "value": "={{ $('Route Optimizer').item.json.optimized_route }}",
+              "type": "array"
+            },
+            {
+              "id": "id-3",
+              "name": "distance",
+              "value": "={{ $('Route Optimizer').item.json.total_distance_km }}",
+              "type": "number"
+            },
+            {
+              "id": "id-4",
+              "name": "mode_reason",
+              "value": "={{ $('Route Optimizer').item.json.mode_reason }}",
+              "type": "string"
+            },
+            {
+              "id": "id-5",
+              "name": "risk_level",
+              "value": "={{ $('Risk Engine').item.json.risk_level }}",
+              "type": "string"
+            },
+            {
+              "id": "id-6",
+              "name": "risk_factors",
+              "value": "={{ $('Risk Engine').item.json.risk_factors }}",
+              "type": "array"
+            },
+            {
+              "id": "id-7",
+              "name": "explanation",
+              "value": "={{ $json.message }}",
+              "type": "string"
+            },
+            {
+              "id": "id-8",
+              "name": "summary",
+              "value": "={{ $json.message }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "3baa0d00-6abd-4386-98ae-0acef1997711",
+      "name": "Build Final Response",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        2400,
+        496
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {}
+      },
+      "id": "856b1b27-a773-4215-8ddf-ec13df1fc7ae",
+      "name": "Return Success Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        2624,
+        496
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      },
+      "id": "05de8bd1-57f1-4930-9db1-cc1dbb20918d",
+      "name": "Merge AI and Risk Results",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        2176,
+        496
+      ]
+    },
+    {
+      "parameters": {
+        "amount": 10
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1680,
+        288
+      ],
+      "id": "e384becc-e82b-4b5d-acf5-7ad71f002b22",
+      "name": "Wait1",
+      "webhookId": "b90a790c-a765-4b9e-b214-ea931636838a"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Strategy Engine": {
+      "main": [
+        [
+          {
+            "node": "Split Orders for Distance Calculation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Logistics Agent Webhook": {
+      "main": [
+        [
+          {
+            "node": "Validate Required Fields",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Required Fields": {
+      "main": [
+        [
+          {
+            "node": "Strategy Engine",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Return Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Orders for Distance Calculation": {
+      "main": [
+        [
+          {
+            "node": "Google Distance Matrix API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Distance Matrix API": {
+      "main": [
+        [
+          {
+            "node": "Collect All Distances",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Collect All Distances": {
+      "main": [
+        [
+          {
+            "node": "Route Optimizer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route Optimizer": {
+      "main": [
+        [
+          {
+            "node": "Risk Engine",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Wait1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Reasoning Engine": {
+      "main": [
+        [
+          {
+            "node": "Merge AI and Risk Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Risk Engine": {
+      "main": [
+        [
+          {
+            "node": "Merge AI and Risk Results",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge AI and Risk Results": {
+      "main": [
+        [
+          {
+            "node": "Build Final Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Final Response": {
+      "main": [
+        [
+          {
+            "node": "Return Success Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait1": {
+      "main": [
+        [
+          {
+            "node": "AI Reasoning Engine",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "0bff6fe0-cd96-4f5e-afe2-b02268990f47",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "37cc583d57c56aa5edea8d23c76f0eb71c1412a2c83d5689b3c7a4aca47449fa"
+  },
+  "id": "oXrIIg1FaHJrP3Yh",
+  "tags": []
+}
